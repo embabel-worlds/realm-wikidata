@@ -1,0 +1,25 @@
+name: wikidata
+description: >-
+  Wikidata enrichment realm — the open knowledge graph joined onto your organizations and
+  people. Anchor an organization you already know (`MATCH (o:Organization
+  {name:'Atlassian'})-[:HAS_WIKIDATA]->(w:WikidataOrg)`) and read what the world's most
+  heavily curated public graph records about it: industry, country, headquarters, founding
+  date, employee count, official website, stock ticker — and the identifier spine that
+  connects registries (LEI, Australian ABN). Traverse one hop further
+  (`(w)-[:WD_RELATION]->(r:WikidataRelation)`) for ownership structure: parent organization,
+  owner, subsidiaries, and what the organization itself owns. People join the same way by
+  name, for disambiguation and a sourced bio line. Everything is fetched live from the
+  Wikidata Query Service (CC0, no API key, no account) in one batched SPARQL query per key
+  set. A name match is a SEARCH RESULT, never an identity claim: the consuming surface must
+  treat the returned description as the check, not the confirmation.
+version: "0.1.0"
+author: "Rod Johnson"
+url: https://github.com/johnsonr/realm-wikidata
+icon: icon.svg
+tags:
+  - wikidata
+  - enrichment
+  - organizations
+  - ownership
+  - open-data
+  - sparql

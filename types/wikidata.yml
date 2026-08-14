@@ -1,0 +1,96 @@
+# The Wikidata join surface. Identity for every type is the full entity IRI (`wd`) —
+# stable across renames, and directly usable as the key of the relations join.
+
+- name: WikidataOrg
+  visibility: internal
+  description: >-
+    What Wikidata records about an organization matched BY NAME: description, industry,
+    country, headquarters, founding date, employee count, official website, ticker, and the
+    cross-registry identifier spine (LEI, Australian ABN). The match is the top result of
+    Wikidata's own entity search gated to organizations — a SEARCH RESULT, not an identity
+    claim; read `wdDescription` to confirm it is the organization you mean before treating
+    any other field as fact. Values are Wikidata's current ("truthy") statements, fetched
+    live and cached for a day.
+  properties:
+    wd:
+      metadata: { identity: "true" }
+    name: "The anchor organization's name as searched — the join key, stamped back."
+    wdLabel: "Wikidata's English label for the matched entity."
+    wdDescription: "Wikidata's one-line English description — the sanity check for the name match."
+    website: "Official website (P856)."
+    employees: "Employee count (P1128), as published on Wikidata."
+    founded: "Inception date (P571), ISO timestamp."
+    ticker: "Stock ticker symbol (P249), when listed."
+    lei: "Legal Entity Identifier (P1278) — the global cross-registry key."
+    abn: "Australian Business Number (P3548), when registered in Australia."
+    industryLabel: "Industry (P452). Multi-valued on Wikidata; one survives on the card."
+    countryLabel: "Country (P17)."
+    hqLabel: "Headquarters location (P159). Multi-valued on Wikidata; one survives on the card."
+    ceoLabel: "Chief executive (P169), preferred-rank (current) statement."
+  virtualJoins:
+    - anchorLabel: Organization
+      relationship: HAS_WIKIDATA
+      keyField: name
+      recordKeyField: name
+      producer: wikidataOrgByName
+      description: >-
+        The Wikidata card for an organization you already hold:
+        `MATCH (o:Organization {name:'…'})-[:HAS_WIKIDATA]->(w:WikidataOrg)`. One live
+        batched query per key set; an organization Wikidata does not know simply gets no
+        card. Chain to `WD_RELATION` for ownership structure.
+
+- name: WikidataPerson
+  visibility: internal
+  description: >-
+    What Wikidata records about a person matched BY NAME: description, birth date,
+    citizenship, website. Deliberately minimal — most people in a personal graph are not
+    notable, and a name search will happily return a famous namesake. The description and
+    birth date are on the card precisely so a WRONG match can be rejected; never present a
+    row as "this is your contact" without that check.
+  properties:
+    wd:
+      metadata: { identity: "true" }
+    name: "The anchor person's name as searched — the join key, stamped back."
+    wdLabel: "Wikidata's English label for the matched entity."
+    wdDescription: "Wikidata's one-line English description — the namesake check."
+    birthDate: "Date of birth (P569), ISO timestamp."
+    countryLabel: "Country of citizenship (P27)."
+    website: "Official website (P856)."
+  virtualJoins:
+    - anchorLabel: Person
+      relationship: HAS_WIKIDATA
+      keyField: name
+      recordKeyField: name
+      producer: wikidataPersonByName
+      description: >-
+        The Wikidata card for a person you already hold:
+        `MATCH (p:Person {name:'…'})-[:HAS_WIKIDATA]->(w:WikidataPerson)`. A name match is
+        a search result — confirm via `wdDescription` before treating it as the same person.
+
+- name: WikidataRelation
+  visibility: internal
+  description: >-
+    One ownership-structure edge from Wikidata for an already-materialized WikidataOrg:
+    its parent organization, owner, a subsidiary, or something it owns. `relation` names
+    the direction; `otherLabel`/`otherDescription` identify the counterparty and `other`
+    carries its entity IRI, so a further hop can re-anchor on it. "Owns" includes owned
+    products (Wikidata models acquisitions that way) but never patents.
+  properties:
+    relKey:
+      metadata: { identity: "true" }
+    wd: "The anchoring WikidataOrg entity IRI — the join key, stamped back."
+    relation: "One of: parent, owner, subsidiary, owns."
+    other: "Entity IRI of the counterparty."
+    otherLabel: "English label of the counterparty."
+    otherDescription: "One-line description of the counterparty."
+  virtualJoins:
+    - anchorLabel: WikidataOrg
+      relationship: WD_RELATION
+      keyField: wd
+      recordKeyField: wd
+      producer: wikidataRelationsByEntity
+      description: >-
+        Ownership structure one hop out from an organization's Wikidata card:
+        `MATCH (w:WikidataOrg)-[:WD_RELATION]->(r:WikidataRelation)`; filter with
+        `r.relation = 'owner'` (or parent / subsidiary / owns). Keyed by the card's
+        entity IRI, so it chains from HAS_WIKIDATA without a second name search.

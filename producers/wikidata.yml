@@ -1,0 +1,123 @@
+# Wikidata Query Service producers — `kind: sparql` (requires the sparql producer backend,
+# me ≥ 2026-08-14). All three fetch LIVE from https://query.wikidata.org/sparql: CC0 data,
+# no API key, no account. The batch lands in one `VALUES` clause per request via `{{keys}}`.
+#
+# TEMPLATE RULES, learned against the live endpoint (see scripts/probe-wikidata.py):
+#   - Templates stay FLAT. Blazegraph (WDQS) throws NotMaterializedException when
+#     mwapi-derived bindings feed aggregation (GROUP_CONCAT/SAMPLE) or string BINDs —
+#     so cards carry only effectively single-valued facts, and multi-valued data
+#     (ownership) is a separate producer keyed by entity IRI, where BIND works fine.
+#   - Every mwapi-derived variable used in an expression needs a REQUIRED triple on it
+#     first (the P31 gates below double as that materialization anchor).
+#   - `wdt:` paths read "truthy" (preferred-rank) statements — current values, not history.
+#   - Wikimedia requires a descriptive User-Agent; keep the contact URL in it.
+
+# ── Organization card by name ────────────────────────────────────────────────────────────
+# EntitySearch (the same search that powers the wikidata.org search box) resolves each
+# name to its top entity, gated to organizations (instance of a subclass of Q43229).
+# Multi-valued props (several HQs, industries) return extra rows; the identity-MERGE on
+# `wd` collapses them to one node with an arbitrary survivor per property — acceptable for
+# a card; anything that needs ALL values belongs in wikidataRelationsByEntity.
+- name: wikidataOrgByName
+  kind: sparql
+  endpoint: "https://query.wikidata.org/sparql"
+  query: |
+    SELECT ?name ?wd ?wdLabel ?wdDescription ?website ?employees ?founded
+           ?ticker ?lei ?abn ?industryLabel ?countryLabel ?hqLabel ?ceoLabel
+    WHERE {
+      VALUES ?name { {{keys}} }
+      SERVICE wikibase:mwapi {
+        bd:serviceParam wikibase:endpoint "www.wikidata.org";
+                        wikibase:api "EntitySearch";
+                        mwapi:search ?name;
+                        mwapi:language "en";
+                        mwapi:limit "1".
+        ?wd wikibase:apiOutputItem mwapi:item.
+      }
+      ?wd wdt:P31/wdt:P279* wd:Q43229 .
+      OPTIONAL { ?wd wdt:P856 ?website . }
+      OPTIONAL { ?wd wdt:P1128 ?employees . }
+      OPTIONAL { ?wd wdt:P571 ?founded . }
+      OPTIONAL { ?wd wdt:P249 ?ticker . }
+      OPTIONAL { ?wd wdt:P1278 ?lei . }
+      OPTIONAL { ?wd wdt:P3548 ?abn . }
+      OPTIONAL { ?wd wdt:P452 ?industry . }
+      OPTIONAL { ?wd wdt:P17 ?country . }
+      OPTIONAL { ?wd wdt:P159 ?hq . }
+      OPTIONAL { ?wd wdt:P169 ?ceo . }
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+    }
+  keyVar: name
+  fetch:
+    # Each name is one server-side EntitySearch inside the loop join — keep batches modest.
+    maxKeysPerCall: 20
+    timeoutSeconds: 60
+    userAgent: "EmbabelRealmWikidata/0.1 (https://github.com/johnsonr/realm-wikidata)"
+  # Wikidata moves slowly; a day of cache keeps repeat questions off the public endpoint.
+  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
+
+# ── Person card by name ──────────────────────────────────────────────────────────────────
+# Gated to humans (P31 Q5). DELIBERATELY minimal: most people in a personal graph are not
+# notable, and EntitySearch will happily return a famous namesake — the description and
+# birth date exist so the consumer can REJECT a wrong match, which is why they are on the
+# card and employer/occupation history is not.
+- name: wikidataPersonByName
+  kind: sparql
+  endpoint: "https://query.wikidata.org/sparql"
+  query: |
+    SELECT ?name ?wd ?wdLabel ?wdDescription ?birthDate ?countryLabel ?website
+    WHERE {
+      VALUES ?name { {{keys}} }
+      SERVICE wikibase:mwapi {
+        bd:serviceParam wikibase:endpoint "www.wikidata.org";
+                        wikibase:api "EntitySearch";
+                        mwapi:search ?name;
+                        mwapi:language "en";
+                        mwapi:limit "1".
+        ?wd wikibase:apiOutputItem mwapi:item.
+      }
+      ?wd wdt:P31 wd:Q5 .
+      OPTIONAL { ?wd wdt:P569 ?birthDate . }
+      OPTIONAL { ?wd wdt:P27 ?country . }
+      OPTIONAL { ?wd wdt:P856 ?website . }
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+    }
+  keyVar: name
+  fetch:
+    maxKeysPerCall: 20
+    timeoutSeconds: 60
+    userAgent: "EmbabelRealmWikidata/0.1 (https://github.com/johnsonr/realm-wikidata)"
+  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
+
+# ── Ownership structure by entity IRI ────────────────────────────────────────────────────
+# Keyed by the `wd` IRI a card join materialized, so it CHAINS: org card first, then
+# relations from the card's identity — no second name search, no ambiguity. Four arms:
+# parent (P749), owner (P127), subsidiary (P355), and the inverse of P127 ("owns"),
+# which deliberately includes owned products (Wikidata models acquisitions that way) but
+# MINUSes patents — a prolific filer would otherwise bury the acquisitions under
+# hundreds of patent rows.
+- name: wikidataRelationsByEntity
+  kind: sparql
+  endpoint: "https://query.wikidata.org/sparql"
+  query: |
+    SELECT ?wd ?relation ?other ?otherLabel ?otherDescription ?relKey WHERE {
+      VALUES ?wd { {{keys}} }
+      {
+        ?wd wdt:P749 ?other . BIND("parent" AS ?relation)
+      } UNION {
+        ?wd wdt:P127 ?other . BIND("owner" AS ?relation)
+      } UNION {
+        ?wd wdt:P355 ?other . BIND("subsidiary" AS ?relation)
+      } UNION {
+        ?other wdt:P127 ?wd . MINUS { ?other wdt:P31/wdt:P279* wd:Q253623 . } BIND("owns" AS ?relation)
+      }
+      BIND(CONCAT(STR(?wd), "|", ?relation, "|", STR(?other)) AS ?relKey)
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+    }
+  keyVar: wd
+  keyForm: iri
+  fetch:
+    maxKeysPerCall: 50
+    timeoutSeconds: 60
+    userAgent: "EmbabelRealmWikidata/0.1 (https://github.com/johnsonr/realm-wikidata)"
+  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
