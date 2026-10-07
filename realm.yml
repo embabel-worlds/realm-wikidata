@@ -16,6 +16,7 @@ version: "0.1.0"
 author: "Rod Johnson"
 url: https://github.com/johnsonr/realm-wikidata
 icon: icon.svg
+category: knowledge
 tags:
   - wikidata
   - enrichment
